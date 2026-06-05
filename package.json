@@ -1,0 +1,76 @@
+{
+  "name": "@toma.com/vad",
+  "version": "1.0.0",
+  "description": "Real-time Voice Activity Detection (Silero V5) and End-of-Turn detection, served over WebSocket and HTTP on Bun.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Toma (https://toma.com)",
+  "contributors": [
+    "Anthony Krivonos (https://github.com/anthonykrivonos)",
+    "Ray Huang (https://github.com/ray-cj-huang)"
+  ],
+  "keywords": [
+    "vad",
+    "voice-activity-detection",
+    "end-of-turn",
+    "silero",
+    "onnx",
+    "bun",
+    "speech"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/toma-so/vad.git"
+  },
+  "homepage": "https://github.com/toma-so/vad#readme",
+  "bugs": {
+    "url": "https://github.com/toma-so/vad/issues"
+  },
+  "engines": {
+    "bun": ">=1.3.0"
+  },
+  "bin": {
+    "vad": "src/index.ts"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "dev": "bun --watch src/index.ts",
+    "start": "bun src/index.ts",
+    "test": "bun test",
+    "test:eot": "bun src/scripts/eotTest.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "clean": "rm -rf node_modules *.tsbuildinfo",
+    "release": "gh release create v$npm_package_version --generate-notes"
+  },
+  "resolutions": {
+    "onnxruntime-node": "1.22.0"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^3.5.0",
+    "async-mutex": "^0.5.0",
+    "lodash": "^4.17.21",
+    "onnxruntime-node": "1.22.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "@types/bun": "1.3.13",
+    "@types/lodash": "^4.17.4",
+    "@types/node": "^22.0.0",
+    "eslint": "^9.0.0",
+    "typescript": "^5.6.0",
+    "typescript-eslint": "^8.0.0"
+  },
+  "trustedDependencies": [
+    "onnxruntime-node",
+    "protobufjs"
+  ]
+}

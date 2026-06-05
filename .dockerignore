@@ -1,0 +1,8 @@
+node_modules
+.git
+.cache
+*.log
+*.tsbuildinfo
+.DS_Store
+.env
+src/scripts/eot_test_results_*.json

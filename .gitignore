@@ -1,0 +1,12 @@
+node_modules/
+*.tsbuildinfo
+*.log
+
+# Local model cache (downloaded from HuggingFace)
+.cache/
+
+# EOT accuracy script output
+src/scripts/eot_test_results_*.json
+
+.DS_Store
+.env

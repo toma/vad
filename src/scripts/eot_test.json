@@ -1,0 +1,282 @@
+[
+  {
+    "label": "Incomplete English Question but Full Thought",
+    "result": true,
+    "context": [
+      {
+        "role": "user",
+        "content": "What is the capital of France",
+        "timestamp": 0
+      }
+    ]
+  },
+  {
+    "label": "Complete English Question",
+    "result": true,
+    "context": [
+      {
+        "role": "user",
+        "content": "What is the capital of France?",
+        "timestamp": 0
+      }
+    ]
+  },
+  {
+    "label": "Multi-turn With Incomplete Thought",
+    "result": false,
+    "context": [
+      {
+        "role": "user",
+        "content": "How do I bake a chocolate cake?",
+        "timestamp": 0
+      },
+      {
+        "role": "assistant",
+        "content": "To bake a chocolate cake, you'll need flour, sugar, cocoa powder, eggs, milk, and butter. Would you like a detailed recipe?",
+        "timestamp": 1
+      },
+      {
+        "role": "user",
+        "content": "Yes please, but I don't have",
+        "timestamp": 2
+      }
+    ]
+  },
+  {
+    "label": "Spanish Complete Question",
+    "result": true,
+    "context": [
+      {
+        "role": "user",
+        "content": "¿Cuál es la capital de España?",
+        "timestamp": 0
+      }
+    ]
+  },
+  {
+    "label": "Spanish Incomplete Question",
+    "result": false,
+    "context": [
+      {
+        "role": "user",
+        "content": "¿Cuál es la capital de",
+        "timestamp": 0
+      }
+    ]
+  },
+  {
+    "label": "Technical Query With Follow-up",
+    "result": true,
+    "context": [
+      {
+        "role": "user",
+        "content": "How do I install React?",
+        "timestamp": 0
+      },
+      {
+        "role": "assistant",
+        "content": "You can install React using npm with the command: npm create-react-app my-app",
+        "timestamp": 1
+      },
+      {
+        "role": "user",
+        "content": "What about using yarn instead?",
+        "timestamp": 2
+      }
+    ]
+  },
+  {
+    "label": "Hanging Ellipsis",
+    "result": false,
+    "context": [
+      {
+        "role": "user",
+        "content": "I'm not sure about...",
+        "timestamp": 0
+      }
+    ]
+  },
+  {
+    "label": "French Complete Statement",
+    "result": true,
+    "context": [
+      {
+        "role": "user",
+        "content": "Je voudrais un café, s'il vous plaît.",
+        "timestamp": 0
+      }
+    ]
+  },
+  {
+    "label": "French Incomplete Statement",
+    "result": false,
+    "context": [
+      {
+        "role": "user",
+        "content": "Je voudrais un",
+        "timestamp": 0
+      }
+    ]
+  },
+  {
+    "label": "Multi-turn Technical Discussion",
+    "result": true,
+    "context": [
+      {
+        "role": "user",
+        "content": "What's the difference between var, let, and const in JavaScript?",
+        "timestamp": 0
+      },
+      {
+        "role": "assistant",
+        "content": "var is function-scoped, while let and const are block-scoped. const variables cannot be reassigned, whereas let variables can. var is hoisted, but let and const have temporal dead zones.",
+        "timestamp": 1
+      },
+      {
+        "role": "user",
+        "content": "Can you give me an example of block scope?",
+        "timestamp": 2
+      }
+    ]
+  },
+  {
+    "label": "German Complete Question",
+    "result": true,
+    "context": [
+      {
+        "role": "user",
+        "content": "Wie spät ist es?",
+        "timestamp": 0
+      }
+    ]
+  },
+  {
+    "label": "Complex Multi-turn With Complete End",
+    "result": true,
+    "context": [
+      {
+        "role": "user",
+        "content": "How do I make pasta from scratch?",
+        "timestamp": 0
+      },
+      {
+        "role": "assistant",
+        "content": "To make pasta from scratch, you'll need flour, eggs, salt, and water. Would you like me to walk you through the process?",
+        "timestamp": 1
+      },
+      {
+        "role": "user",
+        "content": "Yes please!",
+        "timestamp": 2
+      },
+      {
+        "role": "assistant",
+        "content": "1. Mix 2 cups of flour with 1/2 teaspoon salt. 2. Create a well in the center and add 3 eggs. 3. Gradually mix eggs into flour. 4. Knead until smooth. 5. Rest dough for 30 minutes. 6. Roll and cut as desired.",
+        "timestamp": 3
+      },
+      {
+        "role": "user",
+        "content": "How long should I cook it for?",
+        "timestamp": 4
+      }
+    ]
+  },
+  {
+    "label": "Japanese Complete Statement",
+    "result": true,
+    "context": [
+      {
+        "role": "user",
+        "content": "今日は天気がいいですね。",
+        "timestamp": 0
+      }
+    ]
+  },
+  {
+    "label": "Japanese Incomplete Statement",
+    "result": false,
+    "context": [
+      {
+        "role": "user",
+        "content": "今日は天気が",
+        "timestamp": 0
+      }
+    ]
+  },
+  {
+    "label": "Partial Code Request",
+    "result": false,
+    "context": [
+      {
+        "role": "user",
+        "content": "Write a function that",
+        "timestamp": 0
+      }
+    ]
+  },
+  {
+    "label": "Complete Code Request",
+    "result": true,
+    "context": [
+      {
+        "role": "user",
+        "content": "Write a function that calculates the factorial of a number.",
+        "timestamp": 0
+      }
+    ]
+  },
+  {
+    "label": "Emoticon Ending",
+    "result": true,
+    "context": [
+      {
+        "role": "user",
+        "content": "I'm feeling really happy today :)",
+        "timestamp": 0
+      }
+    ]
+  },
+  {
+    "label": "Multi-language Conversation",
+    "result": true,
+    "context": [
+      {
+        "role": "user",
+        "content": "Hola, ¿cómo estás?",
+        "timestamp": 0
+      },
+      {
+        "role": "assistant",
+        "content": "Estoy bien, gracias. ¿Y tú?",
+        "timestamp": 1
+      },
+      {
+        "role": "user",
+        "content": "I'm good too. Can you help me translate something?",
+        "timestamp": 2
+      }
+    ]
+  },
+  {
+    "label": "Incomplete List",
+    "result": false,
+    "context": [
+      {
+        "role": "user",
+        "content": "My favorite colors are: blue, red,",
+        "timestamp": 0
+      }
+    ]
+  },
+  {
+    "label": "Complete List",
+    "result": true,
+    "context": [
+      {
+        "role": "user",
+        "content": "My favorite colors are: blue, red, and green.",
+        "timestamp": 0
+      }
+    ]
+  }
+]
