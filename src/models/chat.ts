@@ -4,12 +4,10 @@ export type ChatRole = "user" | "assistant" | "system";
  * A single message in a conversation.
  * @property role - The role of the message sender (user, assistant, or system)
  * @property content - The text content of the message
- * @property timestamp - Unix timestamp (ms) when the message was created
  */
 export interface ChatMessage {
   role: ChatRole;
   content: string;
-  timestamp: number;
 }
 
 /**

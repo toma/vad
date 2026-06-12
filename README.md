@@ -102,9 +102,9 @@ const eot = new EndOfTurnDetector({
 
 const { endOfTurnProbability } = await eot.detect({
   context: [
-    { role: "user",      content: "what time do you open", timestamp: 1717000000000 },
-    { role: "assistant", content: "we open at 9am",        timestamp: 1717000001000 },
-    { role: "user",      content: "and on weekends",       timestamp: 1717000002000 },
+    { role: "user",      content: "what time do you open" },
+    { role: "assistant", content: "we open at 9am"        },
+    { role: "user",      content: "and on weekends"       },
   ],
 });
 

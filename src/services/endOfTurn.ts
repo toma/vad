@@ -66,11 +66,7 @@ class EotTokenizer {
 
     const lastMessage = _.last(folded);
     if (!lastMessage || lastMessage.role === "assistant") {
-      folded.push({
-        role: "user",
-        content: "",
-        timestamp: Date.now(),
-      });
+      folded.push({ role: "user", content: "" });
     }
 
     const reduced = folded.slice(-MAX_MESSAGES);

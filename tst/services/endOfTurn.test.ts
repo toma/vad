@@ -114,7 +114,7 @@ describe("EndOfTurnDetector queue depth limiting", () => {
 
     const input = {
       context: [
-        { role: "user" as const, content: "hello", timestamp: Date.now() },
+        { role: "user" as const, content: "hello" },
       ],
     };
     const promises: Promise<{ endOfTurnProbability: number }>[] = [];
@@ -140,7 +140,7 @@ describe("EndOfTurnDetector queue depth limiting", () => {
 
     const input = {
       context: [
-        { role: "user" as const, content: "hello", timestamp: Date.now() },
+        { role: "user" as const, content: "hello" },
       ],
     };
     const promises: Promise<{ endOfTurnProbability: number }>[] = [];
@@ -164,7 +164,7 @@ describe("EndOfTurnDetector queue depth limiting", () => {
 
     const input = {
       context: [
-        { role: "user" as const, content: "hello", timestamp: Date.now() },
+        { role: "user" as const, content: "hello" },
       ],
     };
     const result = await detector.detect(input, ac.signal);
