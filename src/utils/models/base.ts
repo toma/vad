@@ -1,7 +1,5 @@
 import { Semaphore } from "async-mutex";
 import { InferenceSession } from "onnxruntime-node";
-import { onTerminate } from "~/utils/common";
-import { getModelPath, type HuggingFaceFile } from "~/utils/hf";
 
 interface BaseOnnxModelParams {
   queueDepth?: number;
@@ -41,12 +39,11 @@ export class BoundedSemaphore {
 }
 
 /**
- * Base class for ONNX models whose weights are fetched from HuggingFace.
- * Lazily loads a single shared InferenceSession behind a semaphore.
+ * Wraps an onnxruntime InferenceSession loaded from a local file path.
+ * Lazily creates a single session per instance, guarded by a semaphore
+ * because onnxruntime sessions are not safe to run concurrently.
  */
 export class BaseOnnxModel<TInput = any, TOutput = any> {
-  private static globalSemaphore: Semaphore = new Semaphore(1);
-
   private _session: BaseOnnxModelSession<TInput, TOutput> | null;
   private _semaphore: BoundedSemaphore | null;
   private _queueDepth?: number;
@@ -55,7 +52,7 @@ export class BaseOnnxModel<TInput = any, TOutput = any> {
   > | null;
 
   constructor(
-    private readonly modelRef: HuggingFaceFile,
+    private readonly modelPath: string,
     params?: BaseOnnxModelParams,
   ) {
     this._session = null;
@@ -64,42 +61,23 @@ export class BaseOnnxModel<TInput = any, TOutput = any> {
     this._initializing = null;
   }
 
-  /**
-   * Get a singleton instance of the model.
-   * @returns A singleton instance of the model.
-   */
   public async getSession(): Promise<
     BaseOnnxModelSession<TInput, TOutput>
   > {
-    // If session already exists and is not released, return it
     if (this._session && !this._session.released) {
       return this._session;
     }
 
-    // Use double-checked locking to prevent race conditions
-    // Acquire global semaphore first to ensure thread-safe initialization check
-    await BaseOnnxModel.globalSemaphore.acquire();
+    if (this._initializing) {
+      return await this._initializing;
+    }
+
+    this._initializing = this._initializeSession();
     try {
-      // Check again after acquiring the global lock
-      if (this._session && !this._session.released) {
-        return this._session;
-      }
-
-      // If initialization is already in progress, wait for it
-      if (this._initializing) {
-        return await this._initializing;
-      }
-
-      // Start initialization
-      this._initializing = this._initializeSession();
-      try {
-        this._session = await this._initializing;
-        return this._session;
-      } finally {
-        this._initializing = null;
-      }
+      this._session = await this._initializing;
+      return this._session;
     } finally {
-      BaseOnnxModel.globalSemaphore.release();
+      this._initializing = null;
     }
   }
 
@@ -110,36 +88,31 @@ export class BaseOnnxModel<TInput = any, TOutput = any> {
     return this._semaphore;
   }
 
+  /**
+   * Release the underlying session if one was created. Safe to call before
+   * `getSession()` was ever invoked — never triggers initialization.
+   */
+  public async releaseSession(): Promise<void> {
+    if (this._session && !this._session.released) {
+      await this._session.release();
+    }
+    this._session = null;
+  }
+
   private async _initializeSession(): Promise<
     BaseOnnxModelSession<TInput, TOutput>
   > {
-    // Acquire instance-specific semaphore for the actual initialization work
-    await this.getSessionSemaphore().acquire();
     try {
-      const modelPath = await getModelPath(this.modelRef);
-      const session = await InferenceSession.create(modelPath, {
+      const session = await InferenceSession.create(this.modelPath, {
         graphOptimizationLevel: "all",
         enableCpuMemArena: false,
         enableMemPattern: false,
-        executionMode: "sequential", // ML models have to be run sequentially
+        executionMode: "sequential",
       });
-      const modelSession = new BaseOnnxModelSession(session);
-
-      onTerminate(async () => {
-        if (!modelSession.released) {
-          await modelSession.release();
-        }
-      });
-
-      return modelSession;
+      return new BaseOnnxModelSession(session);
     } catch (error) {
-      console.error(
-        `Failed to initialize model ${this.modelRef.repo}/${this.modelRef.file}:`,
-        error,
-      );
+      console.error(`Failed to initialize model ${this.modelPath}:`, error);
       throw error;
-    } finally {
-      this.getSessionSemaphore().release();
     }
   }
 }

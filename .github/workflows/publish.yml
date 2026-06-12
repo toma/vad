@@ -1,8 +1,8 @@
 name: Publish to npm
 
-# Publishes @toma-com/vad to npm when a GitHub Release is published.
+# Publishes @toma.com/vad to npm when a GitHub Release is published.
 # Requires an `NPM_TOKEN` repository secret (an npm "Automation" / granular
-# publish token with write access to the @toma-com scope).
+# publish token with write access to the @toma.com scope).
 
 on:
   release:
@@ -24,6 +24,7 @@ jobs:
 
       - run: bun run typecheck
       - run: bun test
+      - run: bun run build
 
       # setup-node writes ~/.npmrc wired to NODE_AUTH_TOKEN for the publish step.
       - uses: actions/setup-node@v4

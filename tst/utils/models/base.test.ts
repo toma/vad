@@ -8,22 +8,12 @@ import {
   test,
 } from "bun:test";
 import { InferenceSession } from "onnxruntime-node";
-import { sleep } from "~/utils/async";
 
-// Mock dependencies
-const mockGetModelPath = mock();
-const mockOnTerminate = mock();
 const mockSessionRun = mock();
 const mockSessionRelease = mock();
 const mockSemaphoreAcquire = mock();
 const mockSemaphoreRelease = mock();
 
-mock.module("~/utils/hf", () => ({
-  getModelPath: mockGetModelPath,
-}));
-mock.module("~/utils/common", () => ({
-  onTerminate: mockOnTerminate,
-}));
 mock.module("onnxruntime-node", () => ({
   InferenceSession: {
     create: mock(),
@@ -36,15 +26,17 @@ mock.module("async-mutex", () => ({
   })),
 }));
 
-// Import after mocks
 import {
   BaseOnnxModel,
   BaseOnnxModelSession,
   BoundedSemaphore,
 } from "../../../src/utils/models/base";
 
-// Helper to create a fake session
-function createFakeSession() {
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function createFakeSession(): InferenceSession {
   return {
     run: mockSessionRun,
     release: mockSessionRelease,
@@ -53,80 +45,62 @@ function createFakeSession() {
 
 describe("BaseOnnxModel", () => {
   beforeEach(() => {
-    mockGetModelPath.mockReset();
-    mockOnTerminate.mockReset();
     mockSessionRun.mockReset();
     mockSessionRelease.mockReset();
     mockSemaphoreAcquire.mockReset();
     mockSemaphoreRelease.mockReset();
     (InferenceSession.create as any).mockReset();
-    // Don't actually call the onTerminate callback during tests
-    mockOnTerminate.mockImplementation(() => {});
   });
 
-  test("should initialize and return a session", async () => {
+  test("forwards modelPath to InferenceSession.create", async () => {
     const fakeSession = createFakeSession();
-    mockGetModelPath.mockResolvedValue("/tmp/model.onnx");
     (InferenceSession.create as any).mockResolvedValue(fakeSession);
 
-    const model = new BaseOnnxModel({ repo: "r", file: "model.onnx" });
+    const model = new BaseOnnxModel("/tmp/model.onnx");
     const session = await model.getSession();
     expect(session).toBeInstanceOf(BaseOnnxModelSession);
-    expect(mockGetModelPath).toHaveBeenCalledWith({
-      repo: "r",
-      file: "model.onnx",
-    });
     expect(InferenceSession.create).toHaveBeenCalledWith("/tmp/model.onnx", {
       graphOptimizationLevel: "all",
       enableCpuMemArena: false,
       enableMemPattern: false,
       executionMode: "sequential",
     });
-    expect(mockOnTerminate).toHaveBeenCalled();
   });
 
-  test("should return the same session if not released", async () => {
-    const fakeModel = { fake: true };
+  test("returns the same session if not released", async () => {
     const fakeSession = createFakeSession();
-    mockGetModelPath.mockResolvedValue(fakeModel);
     (InferenceSession.create as any).mockResolvedValue(fakeSession);
 
-    const model = new BaseOnnxModel({ repo: "r", file: "model.onnx" });
+    const model = new BaseOnnxModel("/tmp/model.onnx");
     const session1 = await model.getSession();
     const session2 = await model.getSession();
     expect(session1).toBe(session2);
-    expect(mockGetModelPath).toHaveBeenCalledTimes(1);
     expect(InferenceSession.create).toHaveBeenCalledTimes(1);
   });
 
-  test("should re-initialize if session is released", async () => {
-    const fakeModel = { fake: true };
+  test("re-initializes if session is released", async () => {
     const fakeSession1 = createFakeSession();
     const fakeSession2 = createFakeSession();
-    mockGetModelPath.mockResolvedValue(fakeModel);
     (InferenceSession.create as any)
       .mockResolvedValueOnce(fakeSession1)
       .mockResolvedValueOnce(fakeSession2);
 
-    const model = new BaseOnnxModel({ repo: "r", file: "model.onnx" });
+    const model = new BaseOnnxModel("/tmp/model.onnx");
     const session1 = await model.getSession();
-    // Simulate release
     (session1 as any)._released = true;
     const session2 = await model.getSession();
     expect(session2).not.toBe(session1);
     expect(InferenceSession.create).toHaveBeenCalledTimes(2);
   });
 
-  test("should wait for initialization if already in progress", async () => {
-    const fakeModel = { fake: true };
+  test("waits for initialization if already in progress", async () => {
     const fakeSession = createFakeSession();
-    mockGetModelPath.mockResolvedValue(fakeModel);
     (InferenceSession.create as any).mockImplementation(async () => {
       await sleep(10);
       return fakeSession;
     });
 
-    const model = new BaseOnnxModel({ repo: "r", file: "model.onnx" });
+    const model = new BaseOnnxModel("/tmp/model.onnx");
     const [session1, session2] = await Promise.all([
       model.getSession(),
       model.getSession(),
@@ -135,15 +109,15 @@ describe("BaseOnnxModel", () => {
     expect(InferenceSession.create).toHaveBeenCalledTimes(1);
   });
 
-  test("should throw and log error if initialization fails", async () => {
+  test("throws and logs error if initialization fails", async () => {
     const error = new Error("Failed to load model");
-    mockGetModelPath.mockRejectedValue(error);
-    const model = new BaseOnnxModel({ repo: "r", file: "bad.onnx" });
+    (InferenceSession.create as any).mockRejectedValue(error);
+    const model = new BaseOnnxModel("/tmp/bad.onnx");
     const consoleSpy = spyOn(console, "error").mockImplementation(() => {});
 
     await expect(model.getSession()).rejects.toThrow("Failed to load model");
     expect(consoleSpy).toHaveBeenCalledWith(
-      "Failed to initialize model r/bad.onnx:",
+      "Failed to initialize model /tmp/bad.onnx:",
       error,
     );
 
@@ -151,7 +125,7 @@ describe("BaseOnnxModel", () => {
   });
 
   test("getSessionSemaphore returns a singleton semaphore", () => {
-    const model = new BaseOnnxModel({ repo: "r", file: "model.onnx" });
+    const model = new BaseOnnxModel("/tmp/model.onnx");
     const sem1 = model.getSessionSemaphore();
     const sem2 = model.getSessionSemaphore();
     expect(sem1).toBeDefined();
@@ -223,7 +197,7 @@ describe("BaseOnnxModel with queueDepth", () => {
       () => new Promise<void>((r) => resolvers.push(r)),
     );
 
-    const model = new BaseOnnxModel({ repo: "r", file: "model.onnx" }, { queueDepth: 1 });
+    const model = new BaseOnnxModel("/tmp/model.onnx", { queueDepth: 1 });
     const sem = model.getSessionSemaphore();
 
     const p1 = sem.acquire();

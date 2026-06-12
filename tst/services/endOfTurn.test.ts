@@ -1,5 +1,12 @@
-import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
-import { sleep } from "~/utils/async";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  expect,
+  mock,
+  spyOn,
+  test,
+} from "bun:test";
 
 const sharedMockInferenceSessionCreate = mock(() =>
   Promise.resolve({ run: mock(), release: mock() }),
@@ -11,30 +18,20 @@ mock.module("onnxruntime-node", () => ({
   Tensor: sharedMockTensor,
 }));
 
-mock.module("~/utils/hf", () => ({
-  getModelPath: mock(() => Promise.resolve("/tmp/fake-model.onnx")),
-}));
-
 mock.module("@huggingface/transformers", () => ({
   AutoTokenizer: { from_pretrained: mock(() => Promise.resolve({})) },
 }));
 
-mock.module("~/utils/math", () => ({
-  softmax: mock(),
-}));
+import { EndOfTurnDetector } from "../../src/services/endOfTurn";
 
-import { endOfTurnHandler } from "../../src/services/endOfTurn";
-import { EndOfTurnModel, EndOfTurnTokenizer } from "../../src/utils/models/eot";
-
-const originalGetSession = EndOfTurnModel.getSession.bind(EndOfTurnModel);
-const originalGetInstance =
-  EndOfTurnTokenizer.getInstance.bind(EndOfTurnTokenizer);
-const originalGetSemaphore =
-  EndOfTurnModel.getSessionSemaphore.bind(EndOfTurnModel);
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 /**
- * Minimal BoundedSemaphore fake. Avoids importing async-mutex directly
- * because other test files mock that module globally.
+ * Minimal BoundedSemaphore fake. Returned by stubbing `getSessionSemaphore`
+ * on the detector's internal model so we can drive queue-depth behavior
+ * deterministically.
  */
 class FakeBoundedSemaphore {
   private _value: number;
@@ -76,39 +73,44 @@ class FakeBoundedSemaphore {
   }
 }
 
-function createSemaphore(
-  value = 1,
-  maxQueueDepth?: number,
-): FakeBoundedSemaphore {
-  return new FakeBoundedSemaphore(value, maxQueueDepth);
-}
-
-function restoreOriginals(): void {
-  EndOfTurnModel.getSession = originalGetSession;
-  EndOfTurnModel.getSessionSemaphore = originalGetSemaphore;
-  EndOfTurnTokenizer.getInstance = originalGetInstance;
-}
-
-describe("endOfTurnHandler queue depth limiting", () => {
-  afterEach(() => {
-    restoreOriginals();
+function buildDetector(opts?: {
+  queueDepth?: number;
+  semaphore?: FakeBoundedSemaphore;
+}): { detector: EndOfTurnDetector; semaphore: FakeBoundedSemaphore } {
+  const detector = new EndOfTurnDetector({
+    modelPath: "/tmp/fake-eot.onnx",
+    tokenizerPath: "/tmp/fake-tokenizer",
+    queueDepth: opts?.queueDepth,
   });
+  const semaphore =
+    opts?.semaphore ?? new FakeBoundedSemaphore(1, opts?.queueDepth);
+  const model = (detector as unknown as { model: unknown }).model as {
+    getSessionSemaphore: () => FakeBoundedSemaphore;
+    getSession: () => Promise<unknown>;
+  };
+  model.getSessionSemaphore = () => semaphore;
+  // Force session lookups to fail so detect() exits the try via catch
+  // without performing real inference.
+  model.getSession = () => Promise.reject(new Error("test mock"));
+  return { detector, semaphore };
+}
 
+describe("EndOfTurnDetector queue depth limiting", () => {
+  // detect() catches the forced rejection and logs via console.error. That
+  // log is expected; silence it to keep test output readable.
+  let consoleErrorSpy: ReturnType<typeof spyOn>;
+  beforeAll(() => {
+    consoleErrorSpy = spyOn(console, "error").mockImplementation(() => {});
+  });
   afterAll(() => {
-    restoreOriginals();
+    consoleErrorSpy.mockRestore();
   });
 
   test("sheds load when queue depth exceeds threshold", async () => {
-    const semaphore = createSemaphore(1, 3);
+    const semaphore = new FakeBoundedSemaphore(1, 3);
     await semaphore.acquire();
 
-    EndOfTurnModel.getSessionSemaphore = mock(() => semaphore) as never;
-    EndOfTurnModel.getSession = mock(() =>
-      Promise.reject(new Error("test mock")),
-    ) as never;
-    EndOfTurnTokenizer.getInstance = mock(() =>
-      Promise.reject(new Error("test mock")),
-    ) as never;
+    const { detector } = buildDetector({ queueDepth: 3, semaphore });
 
     const input = {
       context: [
@@ -118,12 +120,12 @@ describe("endOfTurnHandler queue depth limiting", () => {
     const promises: Promise<{ endOfTurnProbability: number }>[] = [];
 
     for (let i = 0; i < 3; i++) {
-      promises.push(endOfTurnHandler(input));
+      promises.push(detector.detect(input));
     }
 
     await sleep(10);
 
-    const shedResult = await endOfTurnHandler(input);
+    const shedResult = await detector.detect(input);
     expect(shedResult.endOfTurnProbability).toBe(0.5);
 
     semaphore.release();
@@ -131,16 +133,10 @@ describe("endOfTurnHandler queue depth limiting", () => {
   });
 
   test("does not shed when queueDepth is not configured", async () => {
-    const semaphore = createSemaphore(1);
+    const semaphore = new FakeBoundedSemaphore(1);
     await semaphore.acquire();
 
-    EndOfTurnModel.getSessionSemaphore = mock(() => semaphore) as never;
-    EndOfTurnModel.getSession = mock(() =>
-      Promise.reject(new Error("test mock")),
-    ) as never;
-    EndOfTurnTokenizer.getInstance = mock(() =>
-      Promise.reject(new Error("test mock")),
-    ) as never;
+    const { detector } = buildDetector({ semaphore });
 
     const input = {
       context: [
@@ -150,7 +146,7 @@ describe("endOfTurnHandler queue depth limiting", () => {
     const promises: Promise<{ endOfTurnProbability: number }>[] = [];
 
     for (let i = 0; i < 5; i++) {
-      promises.push(endOfTurnHandler(input));
+      promises.push(detector.detect(input));
     }
 
     await sleep(10);
@@ -161,15 +157,7 @@ describe("endOfTurnHandler queue depth limiting", () => {
   });
 
   test("returns default when signal is already aborted after acquire", async () => {
-    const semaphore = createSemaphore(1);
-
-    EndOfTurnModel.getSessionSemaphore = mock(() => semaphore) as never;
-    EndOfTurnModel.getSession = mock(() =>
-      Promise.reject(new Error("test mock")),
-    ) as never;
-    EndOfTurnTokenizer.getInstance = mock(() =>
-      Promise.reject(new Error("test mock")),
-    ) as never;
+    const { detector } = buildDetector();
 
     const ac = new AbortController();
     ac.abort();
@@ -179,7 +167,7 @@ describe("endOfTurnHandler queue depth limiting", () => {
         { role: "user" as const, content: "hello", timestamp: Date.now() },
       ],
     };
-    const result = await endOfTurnHandler(input, ac.signal);
+    const result = await detector.detect(input, ac.signal);
     expect(result.endOfTurnProbability).toBe(0.5);
   });
 });

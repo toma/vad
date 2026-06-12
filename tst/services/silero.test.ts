@@ -1,45 +1,64 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
-import { Tensor } from "onnxruntime-node";
 import Silero from "../../src/services/silero";
 
-// Mock onnxruntime-node
-mock.module("onnxruntime-node", () => ({
-  Tensor: mock().mockImplementation((type, data, dims) => ({
-    data,
-    dims,
-    dispose: mock(),
-    location: "cpu",
-    type,
-  })),
-  InferenceSession: {
-    create: mock().mockResolvedValue({
-      run: mock().mockResolvedValue({}),
-      release: mock().mockResolvedValue(undefined),
-    }),
-  },
-}));
+const FAKE_MODEL_PATH = "/tmp/fake-silero.onnx";
 
-// Mock SileroV5Model
-mock.module("../../src/utils/models/silero", () => ({
-  SileroV5Model: {
-    getSessionSemaphore: mock().mockReturnValue({
-      acquire: mock().mockResolvedValue(undefined),
-      release: mock(),
+interface FakeSession {
+  run: ReturnType<typeof mock>;
+  released: boolean;
+  release: ReturnType<typeof mock>;
+}
+
+interface FakeSemaphore {
+  acquire: ReturnType<typeof mock>;
+  release: ReturnType<typeof mock>;
+  isQueueFull: () => boolean;
+}
+
+/**
+ * Replace the internal BaseOnnxModel on a Silero instance with an in-memory
+ * stub that returns the given speech probability and never touches the real
+ * onnxruntime. Returns the stub so tests can assert against it.
+ */
+function stubModel(
+  silero: Silero,
+  speechProb = 0.7,
+): { session: FakeSession; semaphore: FakeSemaphore } {
+  const session: FakeSession = {
+    run: mock().mockResolvedValue({
+      stateN: { dispose: mock() },
+      output: {
+        data: [speechProb],
+        dims: [1],
+        dispose: mock(),
+      },
     }),
-    getSession: mock().mockResolvedValue({
-      run: mock().mockResolvedValue({
-        stateN: new Tensor("float32", new Float32Array(256), [2, 1, 128]),
-        output: new Tensor("float32", new Float32Array([0.7]), [1]),
-      }),
-      release: mock().mockResolvedValue(undefined),
+    released: false,
+    release: mock(async () => {
+      session.released = true;
     }),
-  },
-}));
+  };
+  const semaphore: FakeSemaphore = {
+    acquire: mock().mockResolvedValue(undefined),
+    release: mock(),
+    isQueueFull: () => false,
+  };
+  (silero as unknown as { model: unknown }).model = {
+    getSession: () => Promise.resolve(session),
+    getSessionSemaphore: () => semaphore,
+    releaseSession: async () => {
+      if (!session.released) {
+        await session.release();
+      }
+    },
+  };
+  return { session, semaphore };
+}
 
 describe("Silero", () => {
   describe("constructor", () => {
-    test("should initialize with correct default values", () => {
-      const silero = new Silero();
+    test("initializes with default state and null context", () => {
+      const silero = new Silero({ modelPath: FAKE_MODEL_PATH });
       expect(silero["context"]).toBeNull();
       expect(silero["state"]).toBeDefined();
       expect(silero["state"]!.dims).toEqual([2, 1, 128]);
@@ -47,8 +66,9 @@ describe("Silero", () => {
   });
 
   describe("destroy", () => {
-    test("should dispose of state and reset context", async () => {
-      const silero = new Silero();
+    test("disposes state, clears context, and releases the session", async () => {
+      const silero = new Silero({ modelPath: FAKE_MODEL_PATH });
+      const { session } = stubModel(silero);
       const disposeSpy = spyOn(silero["state"]!, "dispose");
 
       await silero.destroy();
@@ -56,12 +76,14 @@ describe("Silero", () => {
       expect(disposeSpy).toHaveBeenCalled();
       expect(silero["state"]).toBeNull();
       expect(silero["context"]).toBeNull();
+      expect(session.release).toHaveBeenCalled();
     });
   });
 
   describe("process", () => {
-    test("should return 0 if state is null", async () => {
-      const silero = new Silero();
+    test("returns 0 if state is null", async () => {
+      const silero = new Silero({ modelPath: FAKE_MODEL_PATH });
+      stubModel(silero);
       silero["state"] = null;
 
       const result = await silero.process(new Int16Array(512));
@@ -69,8 +91,9 @@ describe("Silero", () => {
       expect(result).toBe(0);
     });
 
-    test("should process audio frame correctly", async () => {
-      const silero = new Silero();
+    test("returns the probability from the underlying session", async () => {
+      const silero = new Silero({ modelPath: FAKE_MODEL_PATH });
+      stubModel(silero, 0.7);
       const audioFrame = new Int16Array(512).fill(1);
 
       const result = await silero.process(audioFrame);
@@ -78,8 +101,9 @@ describe("Silero", () => {
       expect(result).toBeCloseTo(0.7, 6);
     });
 
-    test("should handle different sample rates", async () => {
-      const silero = new Silero();
+    test("handles 8kHz sample rate", async () => {
+      const silero = new Silero({ modelPath: FAKE_MODEL_PATH });
+      stubModel(silero, 0.7);
       const audioFrame = new Int16Array(256).fill(1);
 
       const result = await silero.process(audioFrame, 8000);
@@ -87,8 +111,9 @@ describe("Silero", () => {
       expect(result).toBeCloseTo(0.7, 6);
     });
 
-    test("should pad short audio frames", async () => {
-      const silero = new Silero();
+    test("pads short audio frames", async () => {
+      const silero = new Silero({ modelPath: FAKE_MODEL_PATH });
+      stubModel(silero, 0.7);
       const audioFrame = new Int16Array(100).fill(1);
 
       const result = await silero.process(audioFrame);
@@ -96,8 +121,9 @@ describe("Silero", () => {
       expect(result).toBeCloseTo(0.7, 6);
     });
 
-    test("should truncate long audio frames", async () => {
-      const silero = new Silero();
+    test("truncates long audio frames", async () => {
+      const silero = new Silero({ modelPath: FAKE_MODEL_PATH });
+      stubModel(silero, 0.7);
       const audioFrame = new Int16Array(1000).fill(1);
 
       const result = await silero.process(audioFrame);

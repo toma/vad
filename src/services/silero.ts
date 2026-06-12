@@ -1,16 +1,34 @@
 import { Tensor } from "onnxruntime-node";
-import { SileroV5Model } from "~/utils/models/silero";
+import { BaseOnnxModel } from "../utils/models/base.js";
 
 const BATCH_SIZE = 1;
 
 /** Divisor to normalize int16 PCM samples into the [-1, 1] float range. */
 const INT16_NORM = 32768;
 
-class Silero {
+export interface SileroParams {
+  /** Absolute path to a Silero VAD v5 ONNX `model.onnx`. */
+  modelPath: string;
+}
+
+type SileroIO = {
+  input: Tensor;
+  state: Tensor;
+  sr: Tensor;
+};
+
+type SileroOutput = {
+  output: Tensor;
+  stateN: Tensor;
+};
+
+export class Silero {
+  private readonly model: BaseOnnxModel<SileroIO, SileroOutput>;
   private context: Int16Array | null;
   private state: Tensor | null;
 
-  constructor() {
+  constructor(params: SileroParams) {
+    this.model = new BaseOnnxModel<SileroIO, SileroOutput>(params.modelPath);
     this.context = null;
     this.state = new Tensor("float32", new Float32Array(2 * BATCH_SIZE * 128), [
       2,
@@ -22,9 +40,8 @@ class Silero {
   public async destroy(): Promise<void> {
     let acquired = false;
     try {
-      // We have to acquire the semaphore here in case the session
-      // is currently calculating on the state tensor
-      await SileroV5Model.getSessionSemaphore().acquire();
+      // Acquire the semaphore in case the session is mid-inference on the state tensor.
+      await this.model.getSessionSemaphore().acquire();
       acquired = true;
 
       if (this.state) {
@@ -36,9 +53,14 @@ class Silero {
       console.error("Error disposing state tensor", error);
     } finally {
       if (acquired) {
-        SileroV5Model.getSessionSemaphore().release();
+        this.model.getSessionSemaphore().release();
       }
     }
+
+    // Release the ONNX session outside the per-instance semaphore so we don't
+    // deadlock with anything that might re-acquire it. Skips quietly if the
+    // session was never created.
+    await this.model.releaseSession();
   }
 
   public async process(
@@ -49,7 +71,6 @@ class Silero {
       return 0;
     }
 
-    // Validate input parameters
     if (!audioFrame || audioFrame.length === 0) {
       console.warn("Empty audio frame provided");
       return 0;
@@ -67,7 +88,6 @@ class Silero {
       this.context = new Int16Array(contextSize);
     }
 
-    // Ensure audioFrame is the correct length
     let processedAudioFrame = audioFrame;
     if (audioFrame.length !== numSamples) {
       if (audioFrame.length > numSamples) {
@@ -79,7 +99,6 @@ class Silero {
       }
     }
 
-    // Combine context and audioFrame
     const x = new Int16Array(this.context.length + processedAudioFrame.length);
     x.set(this.context);
     x.set(processedAudioFrame, this.context.length);
@@ -92,46 +111,38 @@ class Silero {
     let acquired = false;
 
     try {
-      // Normalize audio data
       const floatX = new Float32Array(x.length);
       for (let i = 0; i < x.length; i++) {
         floatX[i] = x[i] / INT16_NORM;
       }
 
-      // Get session asynchronously
-      const session = await SileroV5Model.getSession();
+      const session = await this.model.getSession();
       if (!this.state || !this.context) {
         return 0;
       }
 
-      // Acquire session semaphore
-      await SileroV5Model.getSessionSemaphore().acquire();
+      await this.model.getSessionSemaphore().acquire();
       acquired = true;
       if (!this.state || !this.context) {
         return 0;
       }
 
-      // Create input tensor
       inputTensor = new Tensor("float32", floatX, [BATCH_SIZE, x.length]);
       srTensor = new Tensor("int64", [sr], [1]);
 
-      // Run inference
       const sessionResult = await session.run({
         input: inputTensor,
         state: this.state,
         sr: srTensor,
       });
 
-      // Validate session result
       if (!sessionResult || !sessionResult.stateN || !sessionResult.output) {
         throw new Error("Invalid session result");
       }
 
-      // Record the outputs
       stateNTensor = sessionResult.stateN;
       outputTensor = sessionResult.output;
 
-      // Validate output tensor
       if (
         !outputTensor.data ||
         typeof outputTensor.data !== "object" ||
@@ -140,12 +151,10 @@ class Silero {
         throw new Error("Invalid output tensor data");
       }
 
-      // Save the old state BEFORE updating
       oldState = this.state;
 
-      // Update the state tensor
       this.state = stateNTensor;
-      stateNTensor = null; // Clear the reference
+      stateNTensor = null;
 
       this.context.set(x.subarray(x.length - contextSize));
 
@@ -156,20 +165,18 @@ class Silero {
 
       const [speechProb] = outputData;
 
-      // Validate speech probability
       if (typeof speechProb !== "number" || isNaN(speechProb)) {
         console.warn("Invalid speech probability, returning 0");
         return 0;
       }
 
-      return Math.max(0, Math.min(1, speechProb)); // Clamp between 0 and 1
+      return Math.max(0, Math.min(1, speechProb));
     } catch (error) {
       console.error("Error processing frame", error);
       return 0;
     } finally {
-      // Dispose tensors BEFORE releasing semaphore
-      // This ensures no other thread can use the session while we're disposing tensors
-
+      // Dispose tensors before releasing the semaphore so no other call can
+      // observe a tensor we're about to free.
       try {
         oldState?.dispose();
       } catch (e) {
@@ -202,9 +209,8 @@ class Silero {
         console.error("Error disposing output tensor:", e);
       }
 
-      // Release semaphore LAST, after all tensor cleanup is complete
       if (acquired) {
-        SileroV5Model.getSessionSemaphore().release();
+        this.model.getSessionSemaphore().release();
       }
     }
   }

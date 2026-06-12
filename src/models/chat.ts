@@ -1,7 +1,4 @@
-import { z } from "zod";
-
-export const ChatRoleSchema = z.enum(["user", "assistant", "system"]);
-export type ChatRole = z.infer<typeof ChatRoleSchema>;
+export type ChatRole = "user" | "assistant" | "system";
 
 /**
  * A single message in a conversation.
@@ -9,12 +6,11 @@ export type ChatRole = z.infer<typeof ChatRoleSchema>;
  * @property content - The text content of the message
  * @property timestamp - Unix timestamp (ms) when the message was created
  */
-export const ChatMessageSchema = z.object({
-  role: ChatRoleSchema,
-  content: z.string(),
-  timestamp: z.number(),
-});
-export type ChatMessage = z.infer<typeof ChatMessageSchema>;
+export interface ChatMessage {
+  role: ChatRole;
+  content: string;
+  timestamp: number;
+}
 
 /**
  * Collapse consecutive messages that share the same role into one.

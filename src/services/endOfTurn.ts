@@ -1,136 +1,234 @@
+import { AutoTokenizer, type PreTrainedTokenizer } from "@huggingface/transformers";
+import _ from "lodash";
 import { Tensor } from "onnxruntime-node";
+import { foldContext, type ChatMessage } from "../models/chat.js";
 import type {
   VADEndOfTurnInputType,
   VADEndOfTurnOutputType,
-} from "~/models/vad";
-import { softmax } from "~/utils/math";
-import { EndOfTurnModel, EndOfTurnTokenizer } from "~/utils/models/eot";
+} from "../models/vad.js";
+import { softmax } from "../utils/math.js";
+import { BaseOnnxModel } from "../utils/models/base.js";
+
+const PUNCS = '!"#$%&()*+,-./:;<=>?@[\\]^_`{|}~';
+const MAX_MESSAGES = 4;
+const EOT_TOKEN = "<|im_end|>";
 
 const EOT_ABORTED_DEFAULT: VADEndOfTurnOutputType = {
   endOfTurnProbability: 0.5,
 };
 
-/**
- * Handles detection of whether a user has completed their turn in a conversation.
- *
- * @param input The input containing chat context for end-of-turn detection
- * @returns Object containing the probability that the user has finished their turn
- */
-export async function endOfTurnHandler(
-  input: VADEndOfTurnInputType,
-  signal?: AbortSignal,
-): Promise<VADEndOfTurnOutputType> {
-  let inputTensor: Tensor | undefined;
-  let outputTensor: Tensor | undefined;
-  let acquired: boolean = false;
+export interface EndOfTurnDetectorParams {
+  /** Absolute path to the LiveKit turn-detector ONNX model. */
+  modelPath: string;
+  /**
+   * Absolute path to the tokenizer. Either a directory containing
+   * `tokenizer.json` / `tokenizer_config.json` or a HuggingFace repo id.
+   */
+  tokenizerPath: string;
+  /**
+   * Maximum number of requests that can be queued behind the inference
+   * semaphore before new requests are shed (returning a neutral 0.5).
+   */
+  queueDepth?: number;
+}
 
-  try {
-    const semaphore = EndOfTurnModel.getSessionSemaphore();
+type EotIO = { input_ids: Tensor };
+type EotOutput = { logits: Tensor };
 
-    // Shed load instead of queuing unboundedly when the model is saturated
-    if (semaphore.isQueueFull()) {
-      return EOT_ABORTED_DEFAULT;
-    }
+class EotTokenizer {
+  private constructor(private readonly tokenizer: PreTrainedTokenizer) {}
 
-    await semaphore.acquire();
-    acquired = true;
+  public static async load(tokenizerPath: string): Promise<EotTokenizer> {
+    const tokenizer = await AutoTokenizer.from_pretrained(tokenizerPath);
+    return new EotTokenizer(tokenizer);
+  }
 
-    if (signal?.aborted) {
-      return EOT_ABORTED_DEFAULT;
-    }
+  public get eotToken(): string {
+    return EOT_TOKEN;
+  }
 
-    const session = await EndOfTurnModel.getSession();
-    const eotTokenizer = await EndOfTurnTokenizer.getInstance();
+  public get eotIndex(): number {
+    return this.encode(EOT_TOKEN)[0];
+  }
 
-    // Format and tokenize the context
-    const context = eotTokenizer.formatContext(input.context);
-    const tokens = eotTokenizer.encode(context);
+  public encode(text: string): number[] {
+    return this.tokenizer.encode(text);
+  }
 
-    // Validate tokens array
-    if (!tokens || tokens.length === 0) {
-      throw new Error("Invalid tokens generated from context");
-    }
+  public decode(tokens: number[]): string {
+    return this.tokenizer.decode(tokens);
+  }
 
-    // Create the input tensor
-    inputTensor = new Tensor("int64", tokens, [1, tokens.length]);
-
-    if (signal?.aborted) {
-      return EOT_ABORTED_DEFAULT;
-    }
-
-    // Run the session
-    ({ logits: outputTensor } = await session.run({ input_ids: inputTensor! }));
-
-    // Validate output tensor
-    if (!outputTensor || !outputTensor.dims || outputTensor.dims.length < 2) {
-      throw new Error("Invalid output tensor shape from model");
-    }
-
-    // Get the shape of the logits tensor
-    const shape = outputTensor.dims;
-    const vocabSize = shape[shape.length - 1];
-    const logitsData = outputTensor.data as unknown as number[];
-
-    // Validate logits data
-    if (!logitsData || logitsData.length === 0) {
-      throw new Error("Invalid logits data from model");
-    }
-
-    // Extract the last token's logits
-    const lastTokenIndex = shape[1] - 1;
-    const lastTokenLogitsStart = lastTokenIndex * vocabSize;
-
-    // Validate array bounds
-    if (
-      lastTokenLogitsStart < 0 ||
-      lastTokenLogitsStart + vocabSize > logitsData.length
-    ) {
-      throw new Error("Invalid logits array bounds");
-    }
-
-    const lastTokenLogits = logitsData.slice(
-      lastTokenLogitsStart,
-      lastTokenLogitsStart + vocabSize,
+  public formatContext(context: ChatMessage[]): string {
+    const folded = foldContext(context).filter((msg) =>
+      ["user", "assistant"].includes(msg.role),
     );
 
-    // Apply softmax only to the last token's logits
-    const probs = softmax(lastTokenLogits);
-
-    // Validate eotIndex
-    if (eotTokenizer.eotIndex < 0 || eotTokenizer.eotIndex >= probs.length) {
-      throw new Error("Invalid EOT index");
+    const lastMessage = _.last(folded);
+    if (!lastMessage || lastMessage.role === "assistant") {
+      folded.push({
+        role: "user",
+        content: "",
+        timestamp: Date.now(),
+      });
     }
 
-    return { endOfTurnProbability: probs[eotTokenizer.eotIndex] };
-  } catch (error) {
-    console.error("Error in endOfTurnHandler:", error);
+    const reduced = folded.slice(-MAX_MESSAGES);
 
-    // Return a safe default value
-    return { endOfTurnProbability: 0.5 };
-  } finally {
-    // Dispose tensors BEFORE releasing the semaphore
-    // This ensures no other thread can use the session while we're disposing tensors
+    const normalized = reduced.map((msg) => ({
+      role: msg.role,
+      content: this.normalize(msg.content),
+    }));
+
+    const templateContext = this.tokenizer.apply_chat_template(normalized, {
+      add_generation_prompt: true,
+      tokenize: false,
+    }) as string;
+
+    const lastEotIndex = templateContext.lastIndexOf(EOT_TOKEN);
+    return lastEotIndex >= 0
+      ? templateContext.slice(0, lastEotIndex)
+      : templateContext;
+  }
+
+  private normalize(text: string): string {
+    const stripped = text
+      .split("")
+      .filter((char) => !PUNCS.includes(char))
+      .join("");
+    return stripped.toLowerCase().split(" ").join(" ");
+  }
+}
+
+/**
+ * End-of-turn detector backed by the LiveKit turn-detector ONNX model.
+ *
+ * Given a short chat transcript, returns the probability that the user has
+ * finished their conversational turn.
+ */
+export class EndOfTurnDetector {
+  private readonly model: BaseOnnxModel<EotIO, EotOutput>;
+  private readonly tokenizerPath: string;
+  private tokenizerPromise: Promise<EotTokenizer> | null = null;
+
+  constructor(params: EndOfTurnDetectorParams) {
+    this.model = new BaseOnnxModel<EotIO, EotOutput>(params.modelPath, {
+      queueDepth: params.queueDepth,
+    });
+    this.tokenizerPath = params.tokenizerPath;
+  }
+
+  private getTokenizer(): Promise<EotTokenizer> {
+    if (!this.tokenizerPromise) {
+      this.tokenizerPromise = EotTokenizer.load(this.tokenizerPath);
+    }
+    return this.tokenizerPromise;
+  }
+
+  public async detect(
+    input: VADEndOfTurnInputType,
+    signal?: AbortSignal,
+  ): Promise<VADEndOfTurnOutputType> {
+    let inputTensor: Tensor | undefined;
+    let outputTensor: Tensor | undefined;
+    let acquired = false;
 
     try {
-      inputTensor?.dispose();
-    } catch (disposeError) {
-      console.error("Error disposing input tensor:", disposeError);
-    }
+      const semaphore = this.model.getSessionSemaphore();
 
-    // Dispose output tensor last
-    try {
-      outputTensor?.dispose();
-    } catch (disposeError) {
-      console.error("Error disposing output tensor:", disposeError);
-    }
+      // Shed load instead of queuing unboundedly when the model is saturated.
+      if (semaphore.isQueueFull()) {
+        return EOT_ABORTED_DEFAULT;
+      }
 
-    // Release semaphore LAST, after all tensor cleanup is complete
-    if (acquired) {
+      await semaphore.acquire();
+      acquired = true;
+
+      if (signal?.aborted) {
+        return EOT_ABORTED_DEFAULT;
+      }
+
+      const session = await this.model.getSession();
+      const tokenizer = await this.getTokenizer();
+
+      const context = tokenizer.formatContext(input.context);
+      const tokens = tokenizer.encode(context);
+
+      if (!tokens || tokens.length === 0) {
+        throw new Error("Invalid tokens generated from context");
+      }
+
+      inputTensor = new Tensor("int64", tokens, [1, tokens.length]);
+
+      if (signal?.aborted) {
+        return EOT_ABORTED_DEFAULT;
+      }
+
+      ({ logits: outputTensor } = await session.run({ input_ids: inputTensor }));
+
+      if (!outputTensor || !outputTensor.dims || outputTensor.dims.length < 2) {
+        throw new Error("Invalid output tensor shape from model");
+      }
+
+      const shape = outputTensor.dims;
+      const vocabSize = shape[shape.length - 1];
+      const logitsData = outputTensor.data as unknown as number[];
+
+      if (!logitsData || logitsData.length === 0) {
+        throw new Error("Invalid logits data from model");
+      }
+
+      const lastTokenIndex = shape[1] - 1;
+      const lastTokenLogitsStart = lastTokenIndex * vocabSize;
+
+      if (
+        lastTokenLogitsStart < 0 ||
+        lastTokenLogitsStart + vocabSize > logitsData.length
+      ) {
+        throw new Error("Invalid logits array bounds");
+      }
+
+      const lastTokenLogits = logitsData.slice(
+        lastTokenLogitsStart,
+        lastTokenLogitsStart + vocabSize,
+      );
+
+      const probs = softmax(lastTokenLogits);
+
+      if (tokenizer.eotIndex < 0 || tokenizer.eotIndex >= probs.length) {
+        throw new Error("Invalid EOT index");
+      }
+
+      return { endOfTurnProbability: probs[tokenizer.eotIndex] };
+    } catch (error) {
+      console.error("Error in EndOfTurnDetector.detect:", error);
+      return EOT_ABORTED_DEFAULT;
+    } finally {
       try {
-        EndOfTurnModel.getSessionSemaphore().release();
-      } catch (releaseError) {
-        console.error("Error releasing semaphore:", releaseError);
+        inputTensor?.dispose();
+      } catch (disposeError) {
+        console.error("Error disposing input tensor:", disposeError);
+      }
+
+      try {
+        outputTensor?.dispose();
+      } catch (disposeError) {
+        console.error("Error disposing output tensor:", disposeError);
+      }
+
+      if (acquired) {
+        try {
+          this.model.getSessionSemaphore().release();
+        } catch (releaseError) {
+          console.error("Error releasing semaphore:", releaseError);
+        }
       }
     }
   }
+
+  public async destroy(): Promise<void> {
+    await this.model.releaseSession();
+  }
 }
+
+export default EndOfTurnDetector;

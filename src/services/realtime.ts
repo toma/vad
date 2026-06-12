@@ -1,14 +1,14 @@
 import _ from "lodash";
-import type { VADOutputType } from "~/models/vad";
+import type { VADOutputType } from "../models/vad.js";
 import {
   type RealtimeVADOptions,
   type RealtimeVADOptionsInput,
   type RealtimeVADParams,
   defaultRealtimeVADInput,
   defaultRealtimeVADOptions,
-} from "~/models/realtimeVadOptions";
-import { Mulaw, toTypedArray, upsamplePCM } from "~/utils/audio";
-import Silero from "./silero";
+} from "../models/realtimeVadOptions.js";
+import { Mulaw, toTypedArray, upsamplePCM } from "../utils/audio.js";
+import Silero from "./silero.js";
 
 const MAX_SAMPLE_PAYLOADS = 50;
 const MAX_PROBABILITIES = 1000;
@@ -42,8 +42,8 @@ export class RealtimeVAD {
   private inputLabelToSpeech: Record<string, boolean> = {};
   private destroyed = false;
 
-  constructor(options: RealtimeVADParams = {}) {
-    this.silero = new Silero();
+  constructor(options: RealtimeVADParams) {
+    this.silero = new Silero({ modelPath: options.modelPath });
     this.options = _.merge({}, defaultRealtimeVADOptions, options);
     this.validateOptions();
     if (options?.verbose) {

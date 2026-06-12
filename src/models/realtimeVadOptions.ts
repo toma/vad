@@ -1,4 +1,4 @@
-import type { AudioFormatType } from "~/models/audio";
+import type { AudioFormatType } from "./audio.js";
 
 export interface RealtimeVADOptions {
   format: AudioFormatType;
@@ -7,6 +7,9 @@ export interface RealtimeVADOptions {
 }
 
 export interface RealtimeVADParams {
+  /** Absolute path to a Silero VAD v5 ONNX `model.onnx`. */
+  modelPath: string;
+  format?: AudioFormatType;
   frameDurationMs?: number;
   verbose?: boolean;
   inputs?: Partial<RealtimeVADOptionsInput>[];
