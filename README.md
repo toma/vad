@@ -1,6 +1,6 @@
 # vad
 
-> Embeddable real-time voice activity detection and end-of-turn detection for Node and Bun.
+> Embeddable realtime voice activity detection and end-of-turn detection for Node and Bun.
 
 [![npm](https://img.shields.io/npm/v/@toma.com/vad.svg)](https://www.npmjs.com/package/@toma.com/vad)
 [![CI](https://github.com/toma-so/vad/actions/workflows/ci.yml/badge.svg)](https://github.com/toma-so/vad/actions/workflows/ci.yml)
@@ -44,7 +44,7 @@ curl -L -o turn-detector/special_tokens_map.json \
   https://huggingface.co/livekit/turn-detector/resolve/main/special_tokens_map.json
 ```
 
-## Real-time VAD
+## Realtime VAD
 
 ```ts
 import { RealtimeVAD } from "@toma.com/vad";

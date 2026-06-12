@@ -1,7 +1,7 @@
 {
   "name": "@toma.com/vad",
   "version": "1.0.2",
-  "description": "Embeddable real-time Voice Activity Detection (Silero v5) and End-of-Turn detection. Bring your own local ONNX models.",
+  "description": "Embeddable realtime Voice Activity Detection (Silero v5) and End-of-Turn detection. Bring your own local ONNX models.",
   "type": "module",
   "license": "MIT",
   "author": "Toma (https://toma.com)",
